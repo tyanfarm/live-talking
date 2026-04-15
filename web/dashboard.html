@@ -65,6 +65,10 @@
             max-height: 100%;
             display: block;
             border-radius: var(--border-radius);
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
+            image-rendering: pixelated;
+            object-fit: cover;
         }
 
         .controls-container {
@@ -341,6 +345,10 @@
                                         <div class="form-check form-switch mb-3">
                                             <input class="form-check-input" type="checkbox" id="use-stun">
                                             <label class="form-check-label" for="use-stun">使用STUN服务器</label>
+                                        </div>
+                                        <div class="mb-2">
+                                            <label for="avatar" class="form-label mb-1">Avatar ID（可选）</label>
+                                            <input type="text" class="form-control" id="avatar" placeholder="例如: wav2lip256_avatar1">
                                         </div>
                                     </div>
                                 </div>

@@ -297,6 +297,35 @@ class BaseAvatar:
         if hasattr(self, 'frame_list_cycle'):
             return len(self.frame_list_cycle)
         return 1
+
+    def _is_cuda_oom(self, err: Exception) -> bool:
+        msg = str(err).lower()
+        return (
+            "out of memory" in msg
+            or "cuda error: out of memory" in msg
+            or "cuda error: memory allocation" in msg
+            or "cudaerrormemoryallocation" in msg
+        )
+
+    def _shrink_batch_on_oom(self, audiofeat_batch, audio_frames):
+        if self.batch_size <= 1:
+            return False, audiofeat_batch, audio_frames
+
+        new_batch = max(1, self.batch_size // 2)
+        logger.warning(
+            "session %s CUDA OOM, reducing batch_size %d -> %d",
+            self.sessionid,
+            self.batch_size,
+            new_batch,
+        )
+        self.batch_size = new_batch
+        if hasattr(self, "asr"):
+            self.asr.batch_size = new_batch
+
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        return True, audiofeat_batch[:new_batch], audio_frames[:new_batch * 2]
         
     def inference(self, quit_event):
         length = self.get_avatar_length()
@@ -337,11 +366,27 @@ class BaseAvatar:
                 if current_speaking and not last_speaking and self.custom_index.get(1) is not None: #从静音到说话切换,并且有自定义静态视频
                     index = 0
                 t = time.perf_counter()
-
-                pred = self.inference_batch(index, audiofeat_batch)
+                while True:
+                    try:
+                        pred = self.inference_batch(index, audiofeat_batch)
+                        break
+                    except Exception as e:
+                        if not self._is_cuda_oom(e):
+                            raise
+                        shrunk, audiofeat_batch, audio_frames = self._shrink_batch_on_oom(
+                            audiofeat_batch, audio_frames
+                        )
+                        if not shrunk:
+                            logger.error(
+                                "session %s CUDA OOM at batch_size=1, dropping one inference step",
+                                self.sessionid,
+                            )
+                            pred = []
+                            audio_frames = []
+                            break
 
                 counttime += (time.perf_counter() - t)
-                count += self.batch_size
+                count += len(pred)
                 if count >= 100:
                     logger.info(f"------actual avg infer fps:{count/counttime:.4f}")
                     count = 0
@@ -474,4 +519,3 @@ class BaseAvatar:
 
         process_quit_event.set()
         process_thread.join()
-

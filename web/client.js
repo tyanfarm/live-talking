@@ -1,5 +1,50 @@
 var pc = null;
 
+function updateSDP(sdp) {
+    const lines = sdp.split('\r\n');
+
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].indexOf('m=video') === 0) {
+            if (!lines[i + 1] || lines[i + 1].indexOf('b=AS:') !== 0) {
+                lines.splice(i + 1, 0, 'b=AS:8000');
+            } else {
+                lines[i + 1] = 'b=AS:8000';
+            }
+            break;
+        }
+    }
+
+    for (let i = 0; i < lines.length; i++) {
+        if (lines[i].indexOf('a=fmtp:') !== 0 || lines[i].indexOf('apt=') !== -1) {
+            continue;
+        }
+
+        if (lines[i].indexOf('x-google-min-bitrate=') === -1) {
+            lines[i] += ';x-google-min-bitrate=5000';
+        }
+        if (lines[i].indexOf('x-google-max-bitrate=') === -1) {
+            lines[i] += ';x-google-max-bitrate=8000';
+        }
+        if (lines[i].indexOf('x-google-start-bitrate=') === -1) {
+            lines[i] += ';x-google-start-bitrate=8000';
+        }
+    }
+
+    return lines.join('\r\n');
+}
+
+function resolveAvatarId() {
+    const avatarInput = document.getElementById('avatar');
+    if (avatarInput && avatarInput.value.trim()) {
+        return avatarInput.value.trim();
+    }
+    const urlAvatar = new URLSearchParams(window.location.search).get('avatar');
+    if (urlAvatar) {
+        return urlAvatar.trim();
+    }
+    return '';
+}
+
 function negotiate() {
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
@@ -22,11 +67,16 @@ function negotiate() {
         });
     }).then(() => {
         var offer = pc.localDescription;
+        const payload = {
+            sdp: offer.sdp,
+            type: offer.type,
+        };
+        const avatarId = resolveAvatarId();
+        if (avatarId) {
+            payload.avatar = avatarId;
+        }
         return fetch('/offer', {
-            body: JSON.stringify({
-                sdp: offer.sdp,
-                type: offer.type,
-            }),
+            body: JSON.stringify(payload),
             headers: {
                 'Content-Type': 'application/json'
             },
@@ -35,7 +85,8 @@ function negotiate() {
     }).then((response) => {
         return response.json();
     }).then((answer) => {
-        document.getElementById('sessionid').value = answer.sessionid
+        document.getElementById('sessionid').value = answer.sessionid;
+        answer.sdp = updateSDP(answer.sdp);
         return pc.setRemoteDescription(answer);
     }).catch((e) => {
         alert(e);
