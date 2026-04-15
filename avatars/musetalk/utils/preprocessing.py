@@ -9,7 +9,18 @@ import os
 import json
 from mmpose.apis import inference_topdown, init_model
 from mmpose.structures import merge_data_samples
+
 import torch
+
+_original_torch_load = torch.load
+
+def _patched_torch_load(*args, **kwargs):
+    if "weights_only" not in kwargs:
+        kwargs["weights_only"] = False
+    return _original_torch_load(*args, **kwargs)
+
+torch.load = _patched_torch_load
+
 from tqdm import tqdm
 
 # initialize the mmpose model
