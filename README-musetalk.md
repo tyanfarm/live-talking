@@ -59,13 +59,17 @@ uv pip install -r requirements.txt
 Prebuilt `mmcv` wheels are not available for this stack, so build from source.
 
 ```sh
-pip install "setuptools<70" ninja Cython
-pip install --no-cache-dir -U openmim
+uv pip install "setuptools<70" ninja Cython
+uv pip install --no-cache-dir -U openmim
 
 mim install mmengine
 MAX_JOBS=4 MMCV_WITH_OPS=1 FORCE_CUDA=1 pip install mmcv==2.1.0 --no-cache-dir --no-build-isolation
 mim install "mmdet==3.1.0"
 mim install "mmpose==1.1.0"
+```
+
+``` sh
+pip install "numpy<2" "opencv-python==4.9.0.80"
 ```
 
 Patch `mmdet` version validation:
@@ -121,7 +125,20 @@ ls models/face-parse-bisent/resnet18-5c106cde.pth
 ls models/sd-vae/diffusion_pytorch_model.bin
 ```
 
-## 8. Prepare Your 5s Source Video
+## 8. Step-By-Step Test Flow
+
+This is the shortest path for your exact use case:
+
+1. Prepare a 5s neutral source video
+2. Run `genavatar` to build `data/avatars/<avatar_id>`
+3. Start LiveTalking with `--model musetalk`
+4. Open `webrtcapi.html` and click `Start`
+5. Read the generated `sessionid`
+6. Upload your 11s local WAV to `/humanaudio`
+
+The detailed commands are below.
+
+## 9. Prepare Your 5s Source Video
 
 MuseTalk in this repo needs an avatar directory under `data/avatars/<avatar_id>`.
 Build it from your source video with `avatars/musetalk/genavatar.py`.
@@ -130,15 +147,15 @@ It is safest to normalize the source video to 25 fps first:
 
 ```sh
 mkdir -p data/test_inputs
-ffmpeg -y -i /path/to/input_5s.mp4 -an -vf "fps=25" data/test_inputs/avatar_5s_25fps.mp4
+ffmpeg -y -i /path/to/input_5s.mp4 -an -vf "fps=25" data/test_inputs/{file_name}.mp4
 ```
 
 Generate the avatar:
 
 ```sh
-python avatars/musetalk/genavatar.py \
-  --file data/test_inputs/avatar_5s_25fps.mp4 \
-  --avatar_id musetalk_test_5s \
+python -m avatars.musetalk.genavatar \
+  --file data/test_inputs/{file_name}.mp4 \
+  --avatar_id {avatar_id} \
   --version v15 \
   --gpu_id 0 \
   --bbox_shift 0 \
@@ -148,13 +165,42 @@ python avatars/musetalk/genavatar.py \
 
 This creates:
 
-- `data/avatars/musetalk_test_5s/full_imgs`
-- `data/avatars/musetalk_test_5s/mask`
-- `data/avatars/musetalk_test_5s/coords.pkl`
-- `data/avatars/musetalk_test_5s/mask_coords.pkl`
-- `data/avatars/musetalk_test_5s/latents.pt`
+- `data/avatars/{avatar_id}/full_imgs`
+- `data/avatars/{avatar_id}/mask`
+- `data/avatars/{avatar_id}/coords.pkl`
+- `data/avatars/{avatar_id}/mask_coords.pkl`
+- `data/avatars/{avatar_id}/latents.pt`
 
-## 9. Prepare Your 11s Test Audio
+## 10. Create The Avatar With `genavatar`
+
+Run `genavatar` from the repo root in module mode:
+
+```sh
+python -m avatars.musetalk.genavatar \
+  --file data/test_inputs/{file_name}.mp4 \
+  --avatar_id {avatar_id} \
+  --version v15 \
+  --gpu_id 0 \
+  --bbox_shift 0 \
+  --extra_margin 10 \
+  --parsing_mode jaw
+```
+
+Verify the generated files:
+
+```sh
+find data/avatars/{avatar_id} -maxdepth 2 -type f | sort
+```
+
+You need to see at least:
+
+- `data/avatars/{avatar_id}/latents.pt`
+- `data/avatars/{avatar_id}/coords.pkl`
+- `data/avatars/{avatar_id}/mask_coords.pkl`
+
+If `latents.pt` is missing, do not continue. `app.py` will fail to load the avatar.
+
+## 11. Prepare Your 11s Test Audio
 
 `/humanaudio` accepts file upload and the server resamples it internally, but WAV is the least fragile choice.
 
@@ -162,7 +208,7 @@ This creates:
 ffmpeg -y -i /path/to/input_11s_audio.wav -ac 1 -ar 16000 data/test_inputs/audio_11s.wav
 ```
 
-## 10. Start LiveTalking With MuseTalk
+## 12. Start LiveTalking With MuseTalk
 
 For latency testing, use smaller batches first. `--batch_size 4` is a better low-latency starting point than the default `16`.
 
@@ -183,15 +229,27 @@ http://127.0.0.1:8010/webrtcapi.html
 
 Click `Start` first. The WebRTC session is created only after that.
 
-## 11. Inject The 11s Audio Into The Session
+## 13. Get The `sessionid`
 
-After clicking `Start`, get the generated `sessionid` from the page:
+After clicking `Start`, get the generated `sessionid` from one of these places:
+
+Browser console:
 
 ```js
 document.getElementById('sessionid').value
 ```
 
-Then upload the audio:
+Network tab:
+
+- open DevTools
+- click the `/offer` request
+- read the `sessionid` in the JSON response
+
+If the value is still `0`, the WebRTC session was not created successfully.
+
+## 14. Upload The 11s Audio To `/humanaudio`
+
+This page does not provide an audio upload button. Use `curl`:
 
 ```sh
 curl -X POST http://127.0.0.1:8010/humanaudio \
@@ -201,7 +259,34 @@ curl -X POST http://127.0.0.1:8010/humanaudio \
 
 You should now see the MuseTalk avatar stream in the browser and start speaking with the uploaded audio.
 
-## 12. Notes For Latency Testing
+You can also upload from the browser console:
+
+```js
+const sessionid = document.getElementById('sessionid').value;
+const input = document.createElement('input');
+input.type = 'file';
+input.accept = 'audio/*';
+input.onchange = async () => {
+  const fd = new FormData();
+  fd.append('sessionid', sessionid);
+  fd.append('file', input.files[0]);
+  const res = await fetch('/humanaudio', { method: 'POST', body: fd });
+  console.log(await res.text());
+};
+input.click();
+```
+
+## 15. Optional: Stop Current Speech Immediately
+
+If the avatar is already speaking and you want to interrupt it:
+
+```sh
+curl -X POST http://127.0.0.1:8010/interrupt_talk \
+  -H 'Content-Type: application/json' \
+  -d '{"sessionid":"<SESSION_ID>"}'
+```
+
+## 16. Notes For Latency Testing
 
 - Use `webrtc`, not `rtmp`, for the first latency test.
 - Lower `--batch_size` reduces first-frame latency.
@@ -218,7 +303,7 @@ Practical starting points:
 - More stable throughput: `--batch_size 8`
 - Throughput-focused: `--batch_size 16`
 
-## 13. Useful Runtime Signals
+## 17. Useful Runtime Signals
 
 When audio is uploaded, these runtime signals matter:
 
